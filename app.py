@@ -14,6 +14,16 @@ def health_check():
 @app.route('/analyze', methods=['POST'])
 def analyze_audio():
     try:
+        # Check API key
+        api_key = request.headers.get('X-API-Key')
+        expected_key = os.environ.get('LIBROSA_API_KEY')
+        
+        if not expected_key:
+            return jsonify({'error': 'API key not configured on server'}), 500
+            
+        if not api_key or api_key != expected_key:
+            return jsonify({'error': 'Invalid or missing API key'}), 401
+        
         data = request.get_json()
         audio_url = data.get('audio_url')
         
