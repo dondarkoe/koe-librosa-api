@@ -1,12 +1,14 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 import librosa
 import numpy as np
 import tempfile
 import os
 import requests
+import time
 from basic_pitch.inference import predict
 from basic_pitch import ICASSP_2022_MODEL_PATH
 import pretty_midi
+from collections import defaultdict
 
 app = Flask(__name__)
 
@@ -363,6 +365,440 @@ def analyze_music_theory_librosa(file_path):
             'melody_line': [],
             'onset_times': []
         }
+
+def extract_chord_progression_midi(file_path, include_tracks=['chords', 'bass', 'melody']):
+    """Extract chord progression and create downloadable MIDI with multiple tracks"""
+    try:
+        # Use Basic Pitch to get precise note data
+        model_output, midi_data, note_events = predict(file_path)
+        
+        # Get tempo from original audio for MIDI timing
+        y, sr = librosa.load(file_path, sr=22050)
+        tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
+        
+        # Analyze chord progression using Basic Pitch's recommended approach
+        chord_progression = analyze_chords_from_midi(midi_data, tempo)
+        
+        # Create MIDI file with requested tracks
+        midi_filename = f"chords_{int(time.time())}.mid"
+        midi_path = f"/tmp/{midi_filename}"
+        
+        create_multi_track_midi(chord_progression, midi_data, midi_path, include_tracks, tempo)
+        
+        return {
+            'chord_progression': chord_progression,
+            'midi_download_url': f'/download-midi/{midi_filename}',
+            'total_chords': len(chord_progression),
+            'tempo': float(tempo) if isinstance(tempo, (int, float, np.number)) else float(tempo.item()) if hasattr(tempo, 'item') else 120.0,
+            'tracks_included': include_tracks,
+            'duration': float(midi_data.get_end_time()) if midi_data.get_end_time() > 0 else 0
+        }
+        
+    except Exception as e:
+        # Fallback to Librosa-based chord analysis
+        return extract_chords_librosa_fallback(file_path, include_tracks)
+
+def analyze_chords_from_midi(midi_data, tempo, window_size=2.0):
+    """Analyze chord progression from MIDI data using Basic Pitch's approach"""
+    chords = []
+    
+    if not midi_data.instruments:
+        return chords
+    
+    # Get all notes from all instruments
+    all_notes = []
+    for instrument in midi_data.instruments:
+        for note in instrument.notes:
+            all_notes.append({
+                'pitch': note.pitch,
+                'start': note.start,
+                'end': note.end,
+                'velocity': note.velocity
+            })
+    
+    # Sort by start time
+    all_notes.sort(key=lambda x: x['start'])
+    
+    if not all_notes:
+        return chords
+    
+    # Analyze in time windows (Basic Pitch recommends 2-4 second windows)
+    max_time = max(note['end'] for note in all_notes)
+    current_time = 0
+    
+    while current_time < max_time:
+        # Get notes active in this window
+        active_notes = []
+        for note in all_notes:
+            if (note['start'] <= current_time + window_size and 
+                note['end'] >= current_time):
+                active_notes.append(note)
+        
+        if active_notes:
+            # Identify chord from active notes
+            chord_info = identify_chord_from_notes(active_notes, current_time, window_size)
+            if chord_info:
+                chords.append(chord_info)
+        
+        current_time += window_size
+    
+    return chords
+
+def identify_chord_from_notes(notes, start_time, duration):
+    """Identify chord name and type from a collection of notes"""
+    if not notes:
+        return None
+    
+    # Get unique pitch classes (remove octave information)
+    pitches = [note['pitch'] for note in notes]
+    pitch_classes = sorted(list(set([p % 12 for p in pitches])))
+    
+    # Find root note (usually the lowest or most prominent)
+    root_pitch = min(pitches) % 12
+    
+    # Chord templates with their intervals from root
+    chord_templates = {
+        'Major': [0, 4, 7],
+        'Minor': [0, 3, 7],
+        'Dominant 7th': [0, 4, 7, 10],
+        'Major 7th': [0, 4, 7, 11],
+        'Minor 7th': [0, 3, 7, 10],
+        'Minor Major 7th': [0, 3, 7, 11],
+        'Diminished': [0, 3, 6],
+        'Diminished 7th': [0, 3, 6, 9],
+        'Half Diminished 7th': [0, 3, 6, 10],
+        'Augmented': [0, 4, 8],
+        'Suspended 2nd': [0, 2, 7],
+        'Suspended 4th': [0, 5, 7],
+        'Add 9': [0, 2, 4, 7],
+        'Major 9th': [0, 2, 4, 7, 11],
+        'Minor 9th': [0, 2, 3, 7, 10]
+    }
+    
+    # Note names for root identification
+    note_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+    
+    # Find best matching chord
+    best_match = None
+    best_score = 0
+    
+    for chord_name, template in chord_templates.items():
+        # Try each possible root
+        for root in pitch_classes:
+            transposed_template = [(interval + root) % 12 for interval in template]
+            
+            # Calculate match score
+            matches = len(set(pitch_classes) & set(transposed_template))
+            total_notes = len(set(pitch_classes) | set(transposed_template))
+            score = matches / total_notes if total_notes > 0 else 0
+            
+            if score > best_score and matches >= 2:  # At least 2 notes must match
+                best_score = score
+                root_name = note_names[root]
+                best_match = {
+                    'time': round(start_time, 2),
+                    'duration': round(duration, 2),
+                    'chord_name': f"{root_name} {chord_name}",
+                    'root': root_name,
+                    'chord_type': chord_name,
+                    'notes': [note_names[p] for p in sorted(pitch_classes)],
+                    'midi_notes': sorted(pitches),
+                    'confidence': round(best_score, 3)
+                }
+    
+    # If no good match found, create a generic chord
+    if not best_match:
+        root_name = note_names[root_pitch]
+        best_match = {
+            'time': round(start_time, 2),
+            'duration': round(duration, 2),
+            'chord_name': f"{root_name} Unknown",
+            'root': root_name,
+            'chord_type': 'Unknown',
+            'notes': [note_names[p] for p in sorted(pitch_classes)],
+            'midi_notes': sorted(pitches),
+            'confidence': 0.5
+        }
+    
+    return best_match
+
+def create_multi_track_midi(chord_progression, original_midi, output_path, include_tracks, tempo):
+    """Create multi-track MIDI file for Ableton Live"""
+    # Create new MIDI file
+    midi_file = pretty_midi.PrettyMIDI(initial_tempo=tempo)
+    
+    if 'chords' in include_tracks:
+        # Track 1: Chord progression (block chords)
+        chord_instrument = pretty_midi.Instrument(program=0, name="Chords")  # Piano
+        
+        for chord in chord_progression:
+            start_time = chord['time']
+            end_time = start_time + chord['duration']
+            
+            # Add all chord notes simultaneously
+            for midi_note in chord['midi_notes']:
+                note = pretty_midi.Note(
+                    velocity=80,
+                    pitch=midi_note,
+                    start=start_time,
+                    end=end_time
+                )
+                chord_instrument.notes.append(note)
+        
+        midi_file.instruments.append(chord_instrument)
+    
+    if 'bass' in include_tracks:
+        # Track 2: Bass line (root notes)
+        bass_instrument = pretty_midi.Instrument(program=32, name="Bass")  # Bass
+        
+        for chord in chord_progression:
+            start_time = chord['time']
+            end_time = start_time + chord['duration']
+            
+            # Add root note in bass register
+            root_midi = min(chord['midi_notes'])
+            while root_midi > 48:  # Keep in bass register (below C3)
+                root_midi -= 12
+            
+            note = pretty_midi.Note(
+                velocity=90,
+                pitch=max(24, root_midi),  # Don't go below C1
+                start=start_time,
+                end=end_time
+            )
+            bass_instrument.notes.append(note)
+        
+        midi_file.instruments.append(bass_instrument)
+    
+    if 'melody' in include_tracks and original_midi.instruments:
+        # Track 3: Melody line (highest notes from original)
+        melody_instrument = pretty_midi.Instrument(program=73, name="Melody")  # Flute
+        
+        # Extract melody from original MIDI (highest notes)
+        melody_notes = extract_melody_from_midi(original_midi)
+        
+        for note_info in melody_notes:
+            note = pretty_midi.Note(
+                velocity=70,
+                pitch=note_info['pitch'],
+                start=note_info['start'],
+                end=note_info['end']
+            )
+            melody_instrument.notes.append(note)
+        
+        midi_file.instruments.append(melody_instrument)
+    
+    # Write MIDI file
+    midi_file.write(output_path)
+
+def extract_melody_from_midi(midi_data, window_size=0.5):
+    """Extract melody line by finding highest pitch in time windows"""
+    if not midi_data.instruments:
+        return []
+    
+    # Get all notes
+    all_notes = []
+    for instrument in midi_data.instruments:
+        for note in instrument.notes:
+            all_notes.append({
+                'pitch': note.pitch,
+                'start': note.start,
+                'end': note.end,
+                'velocity': note.velocity
+            })
+    
+    if not all_notes:
+        return []
+    
+    # Sort by start time
+    all_notes.sort(key=lambda x: x['start'])
+    
+    # Extract melody using time windows
+    melody_notes = []
+    max_time = max(note['end'] for note in all_notes)
+    current_time = 0
+    
+    while current_time < max_time:
+        # Find highest note in this window
+        window_notes = [
+            note for note in all_notes
+            if note['start'] <= current_time + window_size and note['end'] >= current_time
+        ]
+        
+        if window_notes:
+            highest_note = max(window_notes, key=lambda x: x['pitch'])
+            melody_notes.append({
+                'pitch': highest_note['pitch'],
+                'start': current_time,
+                'end': current_time + window_size,
+                'velocity': highest_note['velocity']
+            })
+        
+        current_time += window_size
+    
+    return melody_notes
+
+def extract_chords_librosa_fallback(file_path, include_tracks):
+    """Fallback chord extraction using enhanced Librosa analysis"""
+    try:
+        # Load audio
+        y, sr = librosa.load(file_path, sr=22050)
+        
+        # Get tempo and beats
+        tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
+        beat_times = librosa.frames_to_time(beats, sr=sr)
+        
+        # Enhanced chroma analysis
+        chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=512)
+        
+        # Analyze chords at beat positions
+        chord_progression = []
+        
+        for i in range(len(beat_times) - 1):
+            start_time = float(beat_times[i])
+            end_time = float(beat_times[i + 1])
+            duration = end_time - start_time
+            
+            # Get chroma for this beat
+            start_frame = librosa.time_to_frames(start_time, sr=sr, hop_length=512)
+            end_frame = librosa.time_to_frames(end_time, sr=sr, hop_length=512)
+            
+            if start_frame < chroma.shape[1] and end_frame <= chroma.shape[1]:
+                beat_chroma = np.mean(chroma[:, start_frame:end_frame], axis=1)
+                
+                # Find dominant notes
+                note_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+                dominant_notes = []
+                
+                # Get top 3-4 notes
+                top_indices = np.argsort(beat_chroma)[-4:]
+                for idx in top_indices:
+                    if beat_chroma[idx] > 0.3:  # Threshold for significant notes
+                        dominant_notes.append(note_names[idx])
+                
+                if len(dominant_notes) >= 2:
+                    # Simple chord naming based on dominant notes
+                    root = dominant_notes[0]
+                    chord_name = f"{root} Chord"
+                    
+                    chord_progression.append({
+                        'time': round(start_time, 2),
+                        'duration': round(duration, 2),
+                        'chord_name': chord_name,
+                        'root': root,
+                        'chord_type': 'Estimated',
+                        'notes': dominant_notes,
+                        'midi_notes': [note_names.index(note) + 60 for note in dominant_notes],  # C4 = 60
+                        'confidence': 0.7
+                    })
+        
+        # Create MIDI file
+        midi_filename = f"chords_librosa_{int(time.time())}.mid"
+        midi_path = f"/tmp/{midi_filename}"
+        
+        # Ensure tempo is valid
+        safe_tempo = float(tempo) if isinstance(tempo, (int, float, np.number)) else float(tempo.item()) if hasattr(tempo, 'item') else 120.0
+        if safe_tempo <= 0:
+            safe_tempo = 120.0
+            
+        create_simple_chord_midi(chord_progression, midi_path, safe_tempo, include_tracks)
+        
+        return {
+            'method': 'librosa_fallback',
+            'chord_progression': chord_progression,
+            'midi_download_url': f'/download-midi/{midi_filename}',
+            'total_chords': len(chord_progression),
+            'tempo': safe_tempo,
+            'tracks_included': include_tracks,
+            'duration': float(len(y) / sr)
+        }
+        
+    except Exception as e:
+        return {
+            'error': f'Chord extraction failed: {str(e)}',
+            'chord_progression': [],
+            'midi_download_url': None,
+            'total_chords': 0
+        }
+
+def create_simple_chord_midi(chord_progression, output_path, tempo, include_tracks):
+    """Create simple MIDI file from Librosa chord analysis"""
+    midi_file = pretty_midi.PrettyMIDI(initial_tempo=tempo)
+    
+    if 'chords' in include_tracks:
+        chord_instrument = pretty_midi.Instrument(program=0, name="Chords")
+        
+        for chord in chord_progression:
+            start_time = chord['time']
+            end_time = start_time + chord['duration']
+            
+            for midi_note in chord['midi_notes']:
+                note = pretty_midi.Note(
+                    velocity=80,
+                    pitch=midi_note,
+                    start=start_time,
+                    end=end_time
+                )
+                chord_instrument.notes.append(note)
+        
+        midi_file.instruments.append(chord_instrument)
+    
+    midi_file.write(output_path)
+
+@app.route('/extract-chords-midi', methods=['POST'])
+def extract_chords_midi():
+    """Extract chord progression and return downloadable MIDI file"""
+    try:
+        # Check API key
+        api_key = request.headers.get('X-API-Key')
+        expected_key = os.environ.get('LIBROSA_API_KEY')
+        
+        if not expected_key:
+            return jsonify({'error': 'API key not configured on server'}), 500
+            
+        if not api_key or api_key != expected_key:
+            return jsonify({'error': 'Invalid or missing API key'}), 401
+        
+        data = request.get_json()
+        audio_url = data.get('audio_url')
+        include_tracks = data.get('include_tracks', ['chords', 'bass', 'melody'])  # User can specify which tracks
+        
+        if not audio_url:
+            return jsonify({'error': 'No audio_url provided'}), 400
+        
+        # Download audio
+        response = requests.get(audio_url, timeout=30)
+        if response.status_code != 200:
+            return jsonify({'error': 'Failed to download audio file'}), 400
+        
+        # Save temporarily
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
+            tmp_file.write(response.content)
+            tmp_path = tmp_file.name
+        
+        # Extract chords and create MIDI
+        result = extract_chord_progression_midi(tmp_path, include_tracks)
+        os.unlink(tmp_path)
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/download-midi/<filename>', methods=['GET'])
+def download_midi(filename):
+    """Serve the generated MIDI file for download"""
+    try:
+        file_path = f"/tmp/{filename}"
+        if not os.path.exists(file_path):
+            return jsonify({'error': 'MIDI file not found'}), 404
+            
+        return send_file(file_path, 
+                        as_attachment=True, 
+                        download_name=filename,
+                        mimetype='audio/midi')
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
