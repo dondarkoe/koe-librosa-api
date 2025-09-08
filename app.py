@@ -26,6 +26,21 @@ class NumpyEncoder(json.JSONEncoder):
 
 app.json_encoder = NumpyEncoder
 
+# Helper function to convert numpy types recursively
+def convert_numpy_types(obj):
+    if isinstance(obj, dict):
+        return {key: convert_numpy_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    else:
+        return obj
+
 @app.route('/', methods=['GET'])
 def health_check():
     return jsonify({"status": "KOE Librosa API is running!", "version": "1.0"})
@@ -63,6 +78,8 @@ def analyze_audio():
         result = analyze_audio_comprehensive(tmp_path)
         os.unlink(tmp_path)
         
+        # Convert numpy types to JSON-serializable types
+        result = convert_numpy_types(result)
         return jsonify(result)
         
     except Exception as e:
@@ -102,6 +119,8 @@ def analyze_music_theory():
         result = analyze_basic_pitch(tmp_path)
         os.unlink(tmp_path)
         
+        # Convert numpy types to JSON-serializable types
+        result = convert_numpy_types(result)
         return jsonify(result)
         
     except Exception as e:
