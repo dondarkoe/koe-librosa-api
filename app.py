@@ -9,8 +9,22 @@ from basic_pitch.inference import predict
 from basic_pitch import ICASSP_2022_MODEL_PATH
 import pretty_midi
 from collections import defaultdict
+import json
 
 app = Flask(__name__)
+
+# Custom JSON encoder to handle numpy types
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super(NumpyEncoder, self).default(obj)
+
+app.json_encoder = NumpyEncoder
 
 @app.route('/', methods=['GET'])
 def health_check():
