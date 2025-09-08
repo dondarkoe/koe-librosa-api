@@ -400,7 +400,7 @@ def analyze_music_theory_librosa(file_path):
         }
 
 def extract_chord_progression_midi(file_path, include_tracks=['chords', 'bass', 'melody']):
-    """Extract chord progression and create downloadable MIDI with multiple tracks"""
+    """Extract chord progression and create separate downloadable MIDI files for each track"""
     try:
         # Use Basic Pitch to get precise note data
         model_output, midi_data, note_events = predict(file_path)
@@ -412,15 +412,31 @@ def extract_chord_progression_midi(file_path, include_tracks=['chords', 'bass', 
         # Analyze chord progression using Basic Pitch's recommended approach
         chord_progression = analyze_chords_from_midi(midi_data, tempo)
         
-        # Create MIDI file with requested tracks
-        midi_filename = f"chords_{int(time.time())}.mid"
-        midi_path = f"/tmp/{midi_filename}"
+        # Create separate MIDI files for each requested track
+        timestamp = int(time.time())
+        midi_files = {}
         
-        create_multi_track_midi(chord_progression, midi_data, midi_path, include_tracks, tempo)
+        for track_type in include_tracks:
+            midi_filename = f"{track_type}_{timestamp}.mid"
+            midi_path = f"/tmp/{midi_filename}"
+            
+            # Create MIDI file with only this track
+            create_single_track_midi(chord_progression, midi_data, midi_path, track_type, tempo)
+            
+            midi_files[track_type] = {
+                'filename': midi_filename,
+                'download_url': f'/download-midi/{midi_filename}'
+            }
+        
+        # Also create a combined file for backward compatibility
+        combined_filename = f"combined_{timestamp}.mid"
+        combined_path = f"/tmp/{combined_filename}"
+        create_multi_track_midi(chord_progression, midi_data, combined_path, include_tracks, tempo)
         
         return {
             'chord_progression': chord_progression,
-            'midi_download_url': f'/download-midi/{midi_filename}',
+            'midi_files': midi_files,
+            'combined_midi_url': f'/download-midi/{combined_filename}',
             'total_chords': len(chord_progression),
             'tempo': float(tempo) if isinstance(tempo, (int, float, np.number)) else float(tempo.item()) if hasattr(tempo, 'item') else 120.0,
             'tracks_included': include_tracks,
@@ -624,6 +640,75 @@ def create_multi_track_midi(chord_progression, original_midi, output_path, inclu
     # Write MIDI file
     midi_file.write(output_path)
 
+def create_single_track_midi(chord_progression, original_midi, output_path, track_type, tempo):
+    """Create single-track MIDI file for specific track type"""
+    # Create new MIDI file
+    midi_file = pretty_midi.PrettyMIDI(initial_tempo=tempo)
+    
+    if track_type == 'chords':
+        # Chord progression (block chords)
+        chord_instrument = pretty_midi.Instrument(program=0, name="Chords")  # Piano
+        
+        for chord in chord_progression:
+            start_time = chord['time']
+            end_time = start_time + chord['duration']
+            
+            # Add all chord notes simultaneously
+            for midi_note in chord['midi_notes']:
+                note = pretty_midi.Note(
+                    velocity=80,
+                    pitch=midi_note,
+                    start=start_time,
+                    end=end_time
+                )
+                chord_instrument.notes.append(note)
+        
+        midi_file.instruments.append(chord_instrument)
+    
+    elif track_type == 'bass':
+        # Bass line (root notes)
+        bass_instrument = pretty_midi.Instrument(program=32, name="Bass")  # Bass
+        
+        for chord in chord_progression:
+            start_time = chord['time']
+            end_time = start_time + chord['duration']
+            
+            # Add root note in bass register
+            root_midi = min(chord['midi_notes'])
+            while root_midi > 48:  # Keep in bass register (below C3)
+                root_midi -= 12
+            
+            note = pretty_midi.Note(
+                velocity=90,
+                pitch=max(24, root_midi),  # Don't go below C1
+                start=start_time,
+                end=end_time
+            )
+            bass_instrument.notes.append(note)
+        
+        midi_file.instruments.append(bass_instrument)
+    
+    elif track_type == 'melody' and original_midi.instruments:
+        # Melody line (highest notes from original)
+        melody_instrument = pretty_midi.Instrument(program=73, name="Melody")  # Flute
+        
+        # Extract melody from original MIDI (highest notes)
+        melody_notes = extract_melody_from_midi(original_midi)
+        
+        for note_info in melody_notes:
+            note = pretty_midi.Note(
+                velocity=70,
+                pitch=note_info['pitch'],
+                start=note_info['start'],
+                end=note_info['end']
+            )
+            melody_instrument.notes.append(note)
+        
+        midi_file.instruments.append(melody_instrument)
+    
+    # Write MIDI file
+    midi_file.write(output_path)
+
 def extract_melody_from_midi(midi_data, window_size=0.5):
     """Extract melody line by finding highest pitch in time windows"""
     if not midi_data.instruments:
@@ -725,21 +810,37 @@ def extract_chords_librosa_fallback(file_path, include_tracks):
                         'confidence': 0.7
                     })
         
-        # Create MIDI file
-        midi_filename = f"chords_librosa_{int(time.time())}.mid"
-        midi_path = f"/tmp/{midi_filename}"
+        # Create separate MIDI files for each requested track
+        timestamp = int(time.time())
+        midi_files = {}
         
         # Ensure tempo is valid
         safe_tempo = float(tempo) if isinstance(tempo, (int, float, np.number)) else float(tempo.item()) if hasattr(tempo, 'item') else 120.0
         if safe_tempo <= 0:
             safe_tempo = 120.0
+        
+        for track_type in include_tracks:
+            midi_filename = f"{track_type}_librosa_{timestamp}.mid"
+            midi_path = f"/tmp/{midi_filename}"
             
-        create_simple_chord_midi(chord_progression, midi_path, safe_tempo, include_tracks)
+            # Create MIDI file with only this track
+            create_simple_single_track_midi(chord_progression, midi_path, safe_tempo, track_type)
+            
+            midi_files[track_type] = {
+                'filename': midi_filename,
+                'download_url': f'/download-midi/{midi_filename}'
+            }
+        
+        # Also create a combined file for backward compatibility
+        combined_filename = f"combined_librosa_{timestamp}.mid"
+        combined_path = f"/tmp/{combined_filename}"
+        create_simple_chord_midi(chord_progression, combined_path, safe_tempo, include_tracks)
         
         return {
             'method': 'librosa_fallback',
             'chord_progression': chord_progression,
-            'midi_download_url': f'/download-midi/{midi_filename}',
+            'midi_files': midi_files,
+            'combined_midi_url': f'/download-midi/{combined_filename}',
             'total_chords': len(chord_progression),
             'tempo': safe_tempo,
             'tracks_included': include_tracks,
@@ -775,6 +876,73 @@ def create_simple_chord_midi(chord_progression, output_path, tempo, include_trac
                 chord_instrument.notes.append(note)
         
         midi_file.instruments.append(chord_instrument)
+    
+    midi_file.write(output_path)
+
+def create_simple_single_track_midi(chord_progression, output_path, tempo, track_type):
+    """Create simple single-track MIDI file from Librosa chord analysis"""
+    midi_file = pretty_midi.PrettyMIDI(initial_tempo=tempo)
+    
+    if track_type == 'chords':
+        chord_instrument = pretty_midi.Instrument(program=0, name="Chords")
+        
+        for chord in chord_progression:
+            start_time = chord['time']
+            end_time = start_time + chord['duration']
+            
+            for midi_note in chord['midi_notes']:
+                note = pretty_midi.Note(
+                    velocity=80,
+                    pitch=midi_note,
+                    start=start_time,
+                    end=end_time
+                )
+                chord_instrument.notes.append(note)
+        
+        midi_file.instruments.append(chord_instrument)
+    
+    elif track_type == 'bass':
+        bass_instrument = pretty_midi.Instrument(program=32, name="Bass")
+        
+        for chord in chord_progression:
+            start_time = chord['time']
+            end_time = start_time + chord['duration']
+            
+            # Add root note in bass register
+            root_midi = min(chord['midi_notes'])
+            while root_midi > 48:  # Keep in bass register (below C3)
+                root_midi -= 12
+            
+            note = pretty_midi.Note(
+                velocity=90,
+                pitch=max(24, root_midi),  # Don't go below C1
+                start=start_time,
+                end=end_time
+            )
+            bass_instrument.notes.append(note)
+        
+        midi_file.instruments.append(bass_instrument)
+    
+    elif track_type == 'melody':
+        # For Librosa fallback, create a simple melody from the highest chord notes
+        melody_instrument = pretty_midi.Instrument(program=73, name="Melody")
+        
+        for chord in chord_progression:
+            start_time = chord['time']
+            end_time = start_time + chord['duration']
+            
+            # Use highest note from chord as melody
+            melody_note = max(chord['midi_notes'])
+            
+            note = pretty_midi.Note(
+                velocity=70,
+                pitch=melody_note,
+                start=start_time,
+                end=end_time
+            )
+            melody_instrument.notes.append(note)
+        
+        midi_file.instruments.append(melody_instrument)
     
     midi_file.write(output_path)
 
