@@ -399,7 +399,34 @@ def analyze_music_theory_librosa(file_path):
             'onset_times': []
         }
 
-def extract_chord_progression_midi(file_path, include_tracks=['chords', 'bass', 'melody']):
+def generate_midi_filename(track_type, custom_names={}, song_name='', naming_style='descriptive', timestamp=None):
+    """Generate custom MIDI filename in format: 'Song name_TrackType_MIDI by Don Darkoe.mid'"""
+    if timestamp is None:
+        timestamp = int(time.time())
+    
+    # Clean song name for filename
+    if song_name:
+        clean_song = "".join(c for c in song_name if c.isalnum() or c in (' ', '-', '_')).strip()
+        clean_song = clean_song.replace(' ', '_')
+    else:
+        clean_song = "Unknown_Song"
+    
+    # Track type mapping for better names
+    track_names = {
+        'chords': 'Chords',
+        'bass': 'Bass',
+        'melody': 'Melody',
+        'combined': 'Full_Arrangement'
+    }
+    
+    track_name = track_names.get(track_type, track_type.title())
+    
+    # Format: "Song name_TrackType_MIDI by Don Darkoe.mid"
+    filename = f"{clean_song}_{track_name}_MIDI_by_Don_Darkoe.mid"
+    
+    return filename
+
+def extract_chord_progression_midi(file_path, include_tracks=['chords', 'bass', 'melody'], custom_names={}, song_name='', naming_style='descriptive'):
     """Extract chord progression and create separate downloadable MIDI files for each track"""
     try:
         # Use Basic Pitch to get precise note data
@@ -417,7 +444,7 @@ def extract_chord_progression_midi(file_path, include_tracks=['chords', 'bass', 
         midi_files = {}
         
         for track_type in include_tracks:
-            midi_filename = f"{track_type}_{timestamp}.mid"
+            midi_filename = generate_midi_filename(track_type, custom_names, song_name, naming_style, timestamp)
             midi_path = f"/tmp/{midi_filename}"
             
             # Create MIDI file with only this track
@@ -429,7 +456,7 @@ def extract_chord_progression_midi(file_path, include_tracks=['chords', 'bass', 
             }
         
         # Also create a combined file for backward compatibility
-        combined_filename = f"combined_{timestamp}.mid"
+        combined_filename = generate_midi_filename('combined', custom_names, song_name, naming_style, timestamp)
         combined_path = f"/tmp/{combined_filename}"
         create_multi_track_midi(chord_progression, midi_data, combined_path, include_tracks, tempo)
         
@@ -445,7 +472,7 @@ def extract_chord_progression_midi(file_path, include_tracks=['chords', 'bass', 
         
     except Exception as e:
         # Fallback to Librosa-based chord analysis
-        return extract_chords_librosa_fallback(file_path, include_tracks)
+        return extract_chords_librosa_fallback(file_path, include_tracks, custom_names, song_name, naming_style)
 
 def analyze_chords_from_midi(midi_data, tempo, window_size=2.0):
     """Analyze chord progression from MIDI data using Basic Pitch's approach"""
@@ -756,7 +783,7 @@ def extract_melody_from_midi(midi_data, window_size=0.5):
     
     return melody_notes
 
-def extract_chords_librosa_fallback(file_path, include_tracks):
+def extract_chords_librosa_fallback(file_path, include_tracks, custom_names={}, song_name='', naming_style='descriptive'):
     """Fallback chord extraction using enhanced Librosa analysis"""
     try:
         # Load audio
@@ -820,7 +847,7 @@ def extract_chords_librosa_fallback(file_path, include_tracks):
             safe_tempo = 120.0
         
         for track_type in include_tracks:
-            midi_filename = f"{track_type}_librosa_{timestamp}.mid"
+            midi_filename = generate_midi_filename(track_type, custom_names, song_name, naming_style, timestamp)
             midi_path = f"/tmp/{midi_filename}"
             
             # Create MIDI file with only this track
@@ -832,7 +859,7 @@ def extract_chords_librosa_fallback(file_path, include_tracks):
             }
         
         # Also create a combined file for backward compatibility
-        combined_filename = f"combined_librosa_{timestamp}.mid"
+        combined_filename = generate_midi_filename('combined', custom_names, song_name, naming_style, timestamp)
         combined_path = f"/tmp/{combined_filename}"
         create_simple_chord_midi(chord_progression, combined_path, safe_tempo, include_tracks)
         
@@ -964,6 +991,11 @@ def extract_chords_midi():
         audio_url = data.get('audio_url')
         include_tracks = data.get('include_tracks', ['chords', 'bass', 'melody'])  # User can specify which tracks
         
+        # Custom naming options
+        custom_names = data.get('custom_names', {})  # e.g., {"chords": "MyChords", "bass": "MyBass"}
+        song_name = data.get('song_name', '')  # Optional song name for better file naming
+        naming_style = data.get('naming_style', 'descriptive')  # 'descriptive', 'simple', 'timestamp'
+        
         if not audio_url:
             return jsonify({'error': 'No audio_url provided'}), 400
         
@@ -977,8 +1009,8 @@ def extract_chords_midi():
             tmp_file.write(response.content)
             tmp_path = tmp_file.name
         
-        # Extract chords and create MIDI
-        result = extract_chord_progression_midi(tmp_path, include_tracks)
+        # Extract chords and create MIDI with custom naming
+        result = extract_chord_progression_midi(tmp_path, include_tracks, custom_names, song_name, naming_style)
         os.unlink(tmp_path)
         
         return jsonify(result)
