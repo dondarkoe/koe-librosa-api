@@ -1,0 +1,8 @@
+# Nixpacks configuration for Railway
+# Ensures ffmpeg is available for yt-dlp audio extraction
+
+[phases.setup]
+nixPkgs = ["ffmpeg"]
+
+[phases.install]
+cmds = ["pip install -r requirements.txt"]

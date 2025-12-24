@@ -5,6 +5,8 @@ import tempfile
 import os
 import requests
 import time
+import subprocess
+import shutil
 from basic_pitch.inference import predict
 from basic_pitch import ICASSP_2022_MODEL_PATH
 import pretty_midi
@@ -12,6 +14,337 @@ from collections import defaultdict
 import json
 
 app = Flask(__name__)
+
+# =============================================================================
+# STREAMING PLATFORM EXTRACTION (yt-dlp)
+# =============================================================================
+
+STREAMING_PLATFORMS = [
+    'soundcloud.com',
+    'youtube.com',
+    'youtu.be',
+    'spotify.com',
+    'bandcamp.com',
+    'audiomack.com',
+    'tiktok.com',
+    'instagram.com',
+    'twitter.com',
+    'x.com'
+]
+
+def is_streaming_url(url):
+    """Check if URL is from a supported streaming platform"""
+    lower_url = url.lower()
+    return any(platform in lower_url for platform in STREAMING_PLATFORMS)
+
+def get_platform_name(url):
+    """Get friendly name of streaming platform"""
+    lower_url = url.lower()
+    if 'soundcloud.com' in lower_url:
+        return 'SoundCloud'
+    elif 'youtube.com' in lower_url or 'youtu.be' in lower_url:
+        return 'YouTube'
+    elif 'spotify.com' in lower_url:
+        return 'Spotify'
+    elif 'bandcamp.com' in lower_url:
+        return 'Bandcamp'
+    elif 'audiomack.com' in lower_url:
+        return 'Audiomack'
+    elif 'tiktok.com' in lower_url:
+        return 'TikTok'
+    elif 'instagram.com' in lower_url:
+        return 'Instagram'
+    elif 'twitter.com' in lower_url or 'x.com' in lower_url:
+        return 'Twitter/X'
+    return 'Unknown'
+
+def extract_audio_from_url(url, output_dir):
+    """
+    Extract audio from streaming platform URL using yt-dlp
+    Returns path to downloaded audio file
+    """
+    try:
+        # Create output path
+        output_template = os.path.join(output_dir, 'audio.%(ext)s')
+
+        # yt-dlp command for audio extraction
+        cmd = [
+            'yt-dlp',
+            '--no-playlist',
+            '-x',  # Extract audio
+            '--audio-format', 'wav',  # Convert to WAV for analysis
+            '--audio-quality', '0',  # Best quality
+            '-o', output_template,
+            '--no-warnings',
+            '--quiet',
+            url
+        ]
+
+        # Run yt-dlp
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+
+        if result.returncode != 0:
+            error_msg = result.stderr or 'Unknown error'
+            return None, f"yt-dlp failed: {error_msg}"
+
+        # Find the downloaded file
+        for f in os.listdir(output_dir):
+            if f.startswith('audio.'):
+                return os.path.join(output_dir, f), None
+
+        return None, "No audio file was extracted"
+
+    except subprocess.TimeoutExpired:
+        return None, "Audio extraction timed out (120s limit)"
+    except FileNotFoundError:
+        return None, "yt-dlp not installed"
+    except Exception as e:
+        return None, str(e)
+
+# =============================================================================
+# TONN API INTEGRATION (Mix Analysis)
+# =============================================================================
+
+TONN_API_BASE = 'https://tonn.roexaudio.com'
+
+# Musical style mapping
+GENRE_TO_STYLE = {
+    'electronic': 'ELECTRONIC',
+    'edm': 'ELECTRONIC',
+    'house': 'ELECTRONIC',
+    'techno': 'ELECTRONIC',
+    'dubstep': 'ELECTRONIC',
+    'dnb': 'ELECTRONIC',
+    'drum and bass': 'ELECTRONIC',
+    'trance': 'ELECTRONIC',
+    'hip hop': 'HIPHOP_GRIME',
+    'hip-hop': 'HIPHOP_GRIME',
+    'rap': 'HIPHOP_GRIME',
+    'trap': 'HIPHOP_GRIME',
+    'grime': 'HIPHOP_GRIME',
+    'r&b': 'HIPHOP_GRIME',
+    'indie': 'ROCK_INDIE',
+    'alternative': 'ROCK_INDIE',
+    'rock': 'ROCK',
+    'metal': 'ROCK',
+    'punk': 'ROCK',
+    'acoustic': 'ACOUSTIC',
+    'folk': 'ACOUSTIC',
+    'singer-songwriter': 'SINGER_SONGWRITER',
+    'jazz': 'JAZZ',
+    'classical': 'CLASSICAL',
+    'orchestral': 'CLASSICAL',
+    'pop': 'POP',
+    'dance': 'POP'
+}
+
+def map_genre_to_style(genre):
+    """Map user genre to Tonn musical style"""
+    if not genre:
+        return 'ELECTRONIC'
+    lower = genre.lower()
+    for key, style in GENRE_TO_STYLE.items():
+        if key in lower:
+            return style
+    return 'ELECTRONIC'
+
+def upload_to_tonn(audio_path, api_key):
+    """Upload audio file to Tonn and get readable URL"""
+    try:
+        filename = os.path.basename(audio_path)
+
+        # Determine content type
+        ext = os.path.splitext(audio_path)[1].lower()
+        content_types = {
+            '.wav': 'audio/wav',
+            '.mp3': 'audio/mpeg',
+            '.flac': 'audio/flac',
+            '.m4a': 'audio/mp4'
+        }
+        content_type = content_types.get(ext, 'audio/wav')
+
+        # Step 1: Get upload URLs
+        response = requests.post(
+            f'{TONN_API_BASE}/upload',
+            headers={
+                'Content-Type': 'application/json',
+                'x-api-key': api_key
+            },
+            json={'filename': filename, 'contentType': content_type},
+            timeout=30
+        )
+
+        if response.status_code != 200:
+            return None, f"Failed to get upload URL: {response.text}"
+
+        data = response.json()
+        signed_url = data.get('signed_url')
+        readable_url = data.get('readable_url')
+
+        if not signed_url or not readable_url:
+            return None, "Missing URLs in Tonn response"
+
+        # Step 2: Upload file to signed URL
+        with open(audio_path, 'rb') as f:
+            audio_data = f.read()
+
+        put_response = requests.put(
+            signed_url,
+            headers={'Content-Type': content_type},
+            data=audio_data,
+            timeout=60
+        )
+
+        if put_response.status_code not in [200, 201]:
+            return None, f"Failed to upload to Tonn: {put_response.status_code}"
+
+        return readable_url, None
+
+    except Exception as e:
+        return None, str(e)
+
+def analyze_with_tonn(readable_url, musical_style, is_master, api_key):
+    """Run Tonn mix analysis with polling"""
+    try:
+        payload = {
+            'mixDiagnosisData': {
+                'audioFileLocation': readable_url,
+                'musicalStyle': musical_style,
+                'isMaster': is_master
+            }
+        }
+
+        response = requests.post(
+            f'{TONN_API_BASE}/mixanalysis',
+            headers={
+                'Content-Type': 'application/json',
+                'x-api-key': api_key
+            },
+            json=payload,
+            timeout=30
+        )
+
+        # Handle async processing
+        if response.status_code == 202:
+            # Poll for results
+            for attempt in range(30):  # Max 2.5 minutes
+                time.sleep(5)
+                poll_response = requests.post(
+                    f'{TONN_API_BASE}/mixanalysis',
+                    headers={
+                        'Content-Type': 'application/json',
+                        'x-api-key': api_key
+                    },
+                    json=payload,
+                    timeout=30
+                )
+
+                if poll_response.status_code == 200:
+                    data = poll_response.json()
+                    if data.get('mixDiagnosisResults'):
+                        return data, None
+
+            return None, "Tonn analysis timed out"
+
+        if response.status_code != 200:
+            return None, f"Tonn analysis failed: {response.text}"
+
+        return response.json(), None
+
+    except Exception as e:
+        return None, str(e)
+
+def normalize_tonn_response(tonn_data):
+    """Normalize Tonn API response to our format"""
+    result = {}
+
+    if not tonn_data or 'mixDiagnosisResults' not in tonn_data:
+        return result
+
+    payload = tonn_data['mixDiagnosisResults'].get('payload', {})
+
+    # Loudness metrics
+    if payload.get('integrated_loudness_lufs') is not None:
+        result['loudness'] = {
+            'integrated_lufs': payload.get('integrated_loudness_lufs'),
+            'loudness_range_lu': payload.get('loudness_range_lu', 0),
+            'true_peak_dbfs': payload.get('true_peak_dbfs') or payload.get('peak_loudness_dbfs', 0)
+        }
+
+    # Stereo field
+    stereo_field = payload.get('stereo_field', '')
+    width = 50  # Default
+    if 'mono' in stereo_field.lower():
+        width = 0
+    elif 'narrow' in stereo_field.lower():
+        width = 25
+    elif 'wide' in stereo_field.lower():
+        width = 75
+    elif 'very wide' in stereo_field.lower():
+        width = 90
+
+    result['stereo'] = {
+        'width': width,
+        'field': stereo_field,
+        'mono_compatible': payload.get('mono_compatible', True),
+        'phase_issues': payload.get('phase_issues', False)
+    }
+
+    # Dynamics
+    if payload.get('dynamic_range_db') is not None:
+        result['dynamics'] = {
+            'dynamic_range_db': payload.get('dynamic_range_db'),
+            'crest_factor_db': payload.get('crest_factor_db', 0)
+        }
+
+    # Frequency balance
+    if payload.get('frequency_balance'):
+        fb = payload['frequency_balance']
+        result['frequency_balance'] = {
+            'low': fb.get('low', 0),
+            'mid': fb.get('mid', 0),
+            'high': fb.get('high', 0)
+        }
+
+    # Technical info
+    result['technical'] = {
+        'bit_depth': payload.get('bit_depth'),
+        'sample_rate': payload.get('sample_rate'),
+        'clipping': payload.get('clipping', False)
+    }
+
+    # Issues
+    issues = []
+    if payload.get('clipping') in [True, 'true', 'YES']:
+        issues.append({
+            'type': 'clipping',
+            'severity': 'error',
+            'message': 'Digital clipping detected'
+        })
+    if payload.get('phase_issues'):
+        issues.append({
+            'type': 'phase',
+            'severity': 'warning',
+            'message': 'Phase issues detected'
+        })
+    if not payload.get('mono_compatible', True):
+        issues.append({
+            'type': 'mono_compatibility',
+            'severity': 'warning',
+            'message': 'Mix may not translate well to mono'
+        })
+
+    if issues:
+        result['issues'] = issues
+
+    # Master evaluation
+    if payload.get('if_master_drc'):
+        result['master_eval'] = {
+            'drc': payload.get('if_master_drc'),
+            'loudness': payload.get('if_master_loudness')
+        }
+
+    return result
 
 # Custom JSON encoder to handle numpy types
 class NumpyEncoder(json.JSONEncoder):
@@ -43,7 +376,17 @@ def convert_numpy_types(obj):
 
 @app.route('/', methods=['GET'])
 def health_check():
-    return jsonify({"status": "KOE Librosa API is running!", "version": "1.0"})
+    return jsonify({
+        "status": "KOE Audio Analysis API is running!",
+        "version": "2.0",
+        "endpoints": {
+            "/analyze": "Librosa music analysis (tempo, key, energy)",
+            "/analyze-full": "Full analysis with SoundCloud/YouTube support + Tonn mix analysis",
+            "/music-theory": "Basic Pitch music theory analysis",
+            "/extract-chords-midi": "Chord extraction and MIDI generation"
+        },
+        "supported_platforms": ["SoundCloud", "YouTube", "Bandcamp", "Audiomack", "TikTok", "Instagram", "Twitter/X"]
+    })
 
 @app.route('/analyze', methods=['POST'])
 def analyze_audio():
@@ -1025,13 +1368,174 @@ def download_midi(filename):
         file_path = f"/tmp/{filename}"
         if not os.path.exists(file_path):
             return jsonify({'error': 'MIDI file not found'}), 404
-            
-        return send_file(file_path, 
-                        as_attachment=True, 
+
+        return send_file(file_path,
+                        as_attachment=True,
                         download_name=filename,
                         mimetype='audio/midi')
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# =============================================================================
+# UNIFIED ANALYSIS ENDPOINT
+# =============================================================================
+
+@app.route('/analyze-full', methods=['POST'])
+def analyze_full():
+    """
+    Full audio analysis combining:
+    - Streaming platform extraction (yt-dlp)
+    - Librosa music analysis (tempo, key, energy)
+    - Tonn mix analysis (loudness, stereo, dynamics)
+
+    Supports: SoundCloud, YouTube, Bandcamp, and direct audio URLs
+    """
+    tmp_dir = None
+    audio_path = None
+
+    try:
+        # Check API key
+        api_key = request.headers.get('X-API-Key')
+        expected_key = os.environ.get('LIBROSA_API_KEY')
+
+        if not expected_key:
+            return jsonify({'error': 'API key not configured on server'}), 500
+
+        if not api_key or api_key != expected_key:
+            return jsonify({'error': 'Invalid or missing API key'}), 401
+
+        # Get request data
+        data = request.get_json()
+        audio_url = data.get('audio_url')
+        genre = data.get('genre', 'electronic')
+        is_master = data.get('is_master', False)
+
+        if not audio_url:
+            return jsonify({'error': 'No audio_url provided'}), 400
+
+        # Get Tonn API key (optional - if not set, skip Tonn analysis)
+        tonn_api_key = os.environ.get('ROEX_API_KEY')
+
+        # Create temp directory for processing
+        tmp_dir = tempfile.mkdtemp()
+
+        # Step 1: Get audio file (extract from streaming or download directly)
+        platform_name = None
+
+        if is_streaming_url(audio_url):
+            platform_name = get_platform_name(audio_url)
+            audio_path, extract_error = extract_audio_from_url(audio_url, tmp_dir)
+
+            if extract_error:
+                return jsonify({
+                    'error': f'Failed to extract audio from {platform_name}',
+                    'details': extract_error,
+                    'tip': 'Make sure the track is public and the URL is correct.'
+                }), 400
+        else:
+            # Direct audio URL - download it
+            try:
+                response = requests.get(audio_url, timeout=60)
+                if response.status_code != 200:
+                    return jsonify({'error': f'Failed to download audio: HTTP {response.status_code}'}), 400
+
+                # Determine extension from URL or content type
+                ext = '.wav'
+                if '.mp3' in audio_url.lower():
+                    ext = '.mp3'
+                elif '.flac' in audio_url.lower():
+                    ext = '.flac'
+                elif '.m4a' in audio_url.lower():
+                    ext = '.m4a'
+
+                audio_path = os.path.join(tmp_dir, f'audio{ext}')
+                with open(audio_path, 'wb') as f:
+                    f.write(response.content)
+
+            except requests.Timeout:
+                return jsonify({'error': 'Audio download timed out'}), 400
+            except Exception as e:
+                return jsonify({'error': f'Failed to download audio: {str(e)}'}), 400
+
+        # Step 2: Run Librosa analysis
+        librosa_result = None
+        try:
+            librosa_result = analyze_audio_comprehensive(audio_path)
+            librosa_result = convert_numpy_types(librosa_result)
+        except Exception as e:
+            librosa_result = {'error': f'Librosa analysis failed: {str(e)}'}
+
+        # Step 3: Run Tonn analysis (if API key is set)
+        tonn_result = None
+        if tonn_api_key:
+            try:
+                # Upload to Tonn
+                readable_url, upload_error = upload_to_tonn(audio_path, tonn_api_key)
+
+                if upload_error:
+                    tonn_result = {'error': f'Tonn upload failed: {upload_error}'}
+                else:
+                    # Run analysis
+                    musical_style = map_genre_to_style(genre)
+                    tonn_data, analysis_error = analyze_with_tonn(
+                        readable_url, musical_style, is_master, tonn_api_key
+                    )
+
+                    if analysis_error:
+                        tonn_result = {'error': f'Tonn analysis failed: {analysis_error}'}
+                    else:
+                        tonn_result = normalize_tonn_response(tonn_data)
+
+            except Exception as e:
+                tonn_result = {'error': f'Tonn analysis error: {str(e)}'}
+        else:
+            tonn_result = {'skipped': 'ROEX_API_KEY not configured'}
+
+        # Combine results
+        result = {
+            'source': {
+                'url': audio_url,
+                'platform': platform_name,
+                'genre': genre,
+                'is_master': is_master
+            },
+            'librosa': librosa_result,
+            'tonn': tonn_result
+        }
+
+        # Add summary if both analyses succeeded
+        if librosa_result and not librosa_result.get('error'):
+            if tonn_result and not tonn_result.get('error') and not tonn_result.get('skipped'):
+                result['summary'] = {
+                    'tempo': librosa_result.get('tempo'),
+                    'key': librosa_result.get('estimated_key'),
+                    'duration': librosa_result.get('duration'),
+                    'loudness_lufs': tonn_result.get('loudness', {}).get('integrated_lufs'),
+                    'stereo_width': tonn_result.get('stereo', {}).get('width'),
+                    'dynamic_range': tonn_result.get('dynamics', {}).get('dynamic_range_db'),
+                    'issues': tonn_result.get('issues', [])
+                }
+            else:
+                result['summary'] = {
+                    'tempo': librosa_result.get('tempo'),
+                    'key': librosa_result.get('estimated_key'),
+                    'duration': librosa_result.get('duration')
+                }
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    finally:
+        # Cleanup temp files
+        if tmp_dir and os.path.exists(tmp_dir):
+            try:
+                shutil.rmtree(tmp_dir)
+            except:
+                pass
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
