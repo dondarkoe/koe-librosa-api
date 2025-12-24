@@ -1,6 +1,0 @@
-# Nixpacks configuration for Railway
-# Ensures ffmpeg is available for yt-dlp audio extraction
-
-[phases.setup]
-aptPkgs = ["ffmpeg"]
-nixPkgs = ["ffmpeg-full"]
