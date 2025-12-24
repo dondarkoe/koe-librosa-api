@@ -5,6 +5,12 @@ FROM python:3.10-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsndfile1 \
+    libsndfile1-dev \
+    libasound2-dev \
+    libportaudio2 \
+    libportaudiocpp0 \
+    portaudio19-dev \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
