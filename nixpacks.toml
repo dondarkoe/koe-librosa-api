@@ -1,0 +1,5 @@
+# Nixpacks config for Railway
+# Install ffmpeg for yt-dlp audio conversion
+
+[phases.setup]
+aptPkgs = ["ffmpeg", "libsndfile1"]
