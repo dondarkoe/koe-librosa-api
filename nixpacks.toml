@@ -1,5 +1,5 @@
-# Nixpacks config for Railway
-# Install ffmpeg for yt-dlp audio conversion
+# Build config for Railway
+# Uses RAILPACK_DEPLOY_APT_PACKAGES=ffmpeg env var for system packages
 
 [phases.setup]
 nixPkgs = ['...', 'ffmpeg']
