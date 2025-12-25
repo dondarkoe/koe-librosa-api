@@ -22,35 +22,105 @@ app = Flask(__name__)
 # =============================================================================
 
 GENRE_TARGETS = {
-    'electronic': {
-        'name': 'Electronic/EDM',
-        'lufs_target': (-8, -6),
-        'lufs_description': 'Loud masters are standard for club play',
-        'clipping_tolerance': 'moderate',
-        'stereo_width_target': (60, 100),
+    'drum-and-bass': {
+        'name': 'Drum & Bass',
+        'lufs_target': (-8, -7),
+        'lufs_description': 'Club-ready loudness with preserved transients and punch',
+        'clipping_tolerance': 'low',
+        'stereo_width_target': (70, 100),
         'dynamic_range_target': (4, 8),
         'bass_emphasis': 'high',
-        'characteristics': 'Heavy compression, loud masters, wide stereo, punchy kicks, sustained bass'
+        'characteristics': 'Sharp transients, mono sub below 120Hz, wide atmospherics, punchy kicks, 2-4dB max limiter reduction'
     },
     'dubstep': {
         'name': 'Dubstep/Bass Music',
         'lufs_target': (-6, -4),
-        'lufs_description': 'Very loud masters are expected - louder is often better',
+        'lufs_description': 'Very loud masters expected - louder is often better for this genre',
         'clipping_tolerance': 'high',
         'stereo_width_target': (70, 100),
         'dynamic_range_target': (3, 6),
         'bass_emphasis': 'extreme',
-        'characteristics': 'Aggressive limiting, heavy sub-bass, clipping can be intentional for grit, extreme loudness'
+        'characteristics': 'Aggressive limiting, heavy sub-bass, intentional clipping for grit, extreme loudness, mono low-end'
+    },
+    'trap': {
+        'name': 'Trap',
+        'lufs_target': (-10, -8),
+        'lufs_description': 'Punchy with massive 808 presence, dense and aggressive',
+        'clipping_tolerance': 'high',
+        'stereo_width_target': (40, 80),
+        'dynamic_range_target': (4, 8),
+        'bass_emphasis': 'extreme',
+        'characteristics': 'Massive 808s, soft clipping for warmth, centered kick/snare/bass, wide hi-hats, harmonics for small speaker translation'
+    },
+    'techno': {
+        'name': 'Techno',
+        'lufs_target': (-8, -6),
+        'lufs_description': 'Loud club masters with controlled dynamics for DJ mixing',
+        'clipping_tolerance': 'moderate',
+        'stereo_width_target': (60, 100),
+        'dynamic_range_target': (5, 7),
+        'bass_emphasis': 'high',
+        'characteristics': 'Tight low-end, soft clipping before limiter, mono bass below 150Hz, wide highs, punchy kicks'
+    },
+    'baile-funk': {
+        'name': 'Baile Funk',
+        'lufs_target': (-10, -8),
+        'lufs_description': 'Maximum loudness with intentional distortion - roughness is the aesthetic',
+        'clipping_tolerance': 'extreme',
+        'stereo_width_target': (50, 80),
+        'dynamic_range_target': (3, 6),
+        'bass_emphasis': 'extreme',
+        'characteristics': 'Distorted 808s, metallic kicks, trashy snares, clipping encouraged, tamborzão rhythm, 130-150 BPM'
+    },
+    'uk-garage': {
+        'name': 'UK Garage',
+        'lufs_target': (-9, -6),
+        'lufs_description': 'Club-ready with preserved groove and 2-step swing',
+        'clipping_tolerance': 'moderate',
+        'stereo_width_target': (50, 85),
+        'dynamic_range_target': (6, 8),
+        'bass_emphasis': 'high',
+        'characteristics': '2-step shuffle, tight sub-bass, crisp vocals, light drum bus clipping, mono low-end for clubs'
+    },
+    'bass-house': {
+        'name': 'Bass House',
+        'lufs_target': (-10, -8),
+        'lufs_description': 'Aggressive loudness with punchy, saturated bass',
+        'clipping_tolerance': 'high',
+        'stereo_width_target': (60, 100),
+        'dynamic_range_target': (4, 8),
+        'bass_emphasis': 'extreme',
+        'characteristics': 'Mono sub below 100Hz, wide upper harmonics, soft clipping for grit, tube saturation on kicks, sidechain compression'
+    },
+    'trance': {
+        'name': 'Trance',
+        'lufs_target': (-10, -8),
+        'lufs_description': 'Euphoric loudness with wide stereo field and preserved dynamics',
+        'clipping_tolerance': 'low',
+        'stereo_width_target': (80, 100),
+        'dynamic_range_target': (4, 8),
+        'bass_emphasis': 'high',
+        'characteristics': 'Wide stereo imaging, mono sub below 100Hz, euphoric highs, clean sine sub-bass, builds and drops for contrast'
+    },
+    'afrobeats': {
+        'name': 'Afrobeats',
+        'lufs_target': (-10, -8),
+        'lufs_description': 'Energetic loudness with clear vocals sitting on top',
+        'clipping_tolerance': 'moderate',
+        'stereo_width_target': (50, 85),
+        'dynamic_range_target': (5, 8),
+        'bass_emphasis': 'high',
+        'characteristics': 'Vocals highest priority, snare on third beat, layered percussion, mono bass below 120Hz, soft clipping acceptable'
     },
     'hip-hop': {
-        'name': 'Hip-Hop/Trap',
-        'lufs_target': (-10, -7),
-        'lufs_description': 'Punchy but not overly crushed to preserve vocal clarity',
-        'clipping_tolerance': 'low',
+        'name': 'Hip-Hop',
+        'lufs_target': (-12, -9),
+        'lufs_description': 'Punchy with clear vocal presence and controlled 808s',
+        'clipping_tolerance': 'moderate',
         'stereo_width_target': (40, 70),
         'dynamic_range_target': (5, 9),
         'bass_emphasis': 'high',
-        'characteristics': '808 sub-bass clarity, punchy drums, clear vocals, moderate loudness'
+        'characteristics': '808 sub-bass clarity, punchy drums, vocals on top, centered low-end, soft clipping for warmth'
     },
     'pop': {
         'name': 'Pop',
@@ -60,17 +130,7 @@ GENRE_TARGETS = {
         'stereo_width_target': (50, 80),
         'dynamic_range_target': (6, 10),
         'bass_emphasis': 'moderate',
-        'characteristics': 'Clean masters, no clipping, balanced frequency response, streaming-optimized'
-    },
-    'rock': {
-        'name': 'Rock',
-        'lufs_target': (-11, -8),
-        'lufs_description': 'Dynamic range preserved for energy, moderate loudness',
-        'clipping_tolerance': 'low',
-        'stereo_width_target': (60, 90),
-        'dynamic_range_target': (7, 12),
-        'bass_emphasis': 'moderate',
-        'characteristics': 'Natural dynamics, guitar clarity, punchy drums, analog warmth'
+        'characteristics': 'Clean masters, no clipping, balanced frequency response, streaming-optimized, vocal clarity'
     },
     'r-and-b': {
         'name': 'R&B/Soul',
@@ -78,59 +138,9 @@ GENRE_TARGETS = {
         'lufs_description': 'Warmth and dynamics prioritized over loudness',
         'clipping_tolerance': 'none',
         'stereo_width_target': (40, 70),
-        'dynamic_range_target': (8, 14),
+        'dynamic_range_target': (8, 12),
         'bass_emphasis': 'moderate',
-        'characteristics': 'Warm low-end, smooth vocals, natural dynamics, minimal compression'
-    },
-    'classical': {
-        'name': 'Classical/Orchestral',
-        'lufs_target': (-18, -14),
-        'lufs_description': 'Maximum dynamic range is essential',
-        'clipping_tolerance': 'none',
-        'stereo_width_target': (80, 100),
-        'dynamic_range_target': (14, 20),
-        'bass_emphasis': 'natural',
-        'characteristics': 'Full dynamic range, natural stereo imaging, no limiting, pristine clarity'
-    },
-    'jazz': {
-        'name': 'Jazz',
-        'lufs_target': (-16, -12),
-        'lufs_description': 'Natural dynamics and room ambience preserved',
-        'clipping_tolerance': 'none',
-        'stereo_width_target': (60, 90),
-        'dynamic_range_target': (10, 16),
-        'bass_emphasis': 'natural',
-        'characteristics': 'Natural dynamics, acoustic clarity, minimal processing, warm tone'
-    },
-    'country': {
-        'name': 'Country',
-        'lufs_target': (-12, -9),
-        'lufs_description': 'Radio-friendly but natural sounding',
-        'clipping_tolerance': 'none',
-        'stereo_width_target': (50, 80),
-        'dynamic_range_target': (7, 12),
-        'bass_emphasis': 'moderate',
-        'characteristics': 'Natural acoustic instruments, clear vocals, moderate loudness'
-    },
-    'metal': {
-        'name': 'Metal',
-        'lufs_target': (-8, -5),
-        'lufs_description': 'Loud and aggressive is expected',
-        'clipping_tolerance': 'moderate',
-        'stereo_width_target': (70, 100),
-        'dynamic_range_target': (4, 8),
-        'bass_emphasis': 'high',
-        'characteristics': 'Heavy compression, loud masters, tight low-end, aggressive limiting'
-    },
-    'ambient': {
-        'name': 'Ambient/Experimental',
-        'lufs_target': (-18, -12),
-        'lufs_description': 'Dynamics and space are essential',
-        'clipping_tolerance': 'none',
-        'stereo_width_target': (80, 100),
-        'dynamic_range_target': (12, 20),
-        'bass_emphasis': 'variable',
-        'characteristics': 'Wide stereo field, full dynamics, atmospheric space, no aggressive limiting'
+        'characteristics': 'Warm low-end, smooth vocals, natural dynamics, minimal compression, clean masters'
     },
     'other': {
         'name': 'General/Mixed',
@@ -140,7 +150,7 @@ GENRE_TARGETS = {
         'stereo_width_target': (50, 80),
         'dynamic_range_target': (6, 12),
         'bass_emphasis': 'moderate',
-        'characteristics': 'Balanced frequency response, streaming-optimized loudness'
+        'characteristics': 'Balanced frequency response, streaming-optimized loudness, versatile mastering'
     }
 }
 
