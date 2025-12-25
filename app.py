@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, after_this_request
 import librosa
 import numpy as np
 import tempfile
@@ -390,84 +390,98 @@ def health_check():
 
 @app.route('/analyze', methods=['POST'])
 def analyze_audio():
+    tmp_path = None
     try:
         # Check API key
         api_key = request.headers.get('X-API-Key')
         expected_key = os.environ.get('LIBROSA_API_KEY')
-        
+
         if not expected_key:
             return jsonify({'error': 'API key not configured on server'}), 500
-            
+
         if not api_key or api_key != expected_key:
             return jsonify({'error': 'Invalid or missing API key'}), 401
-        
+
         data = request.get_json()
         audio_url = data.get('audio_url')
-        
+
         if not audio_url:
             return jsonify({'error': 'No audio_url provided'}), 400
-        
+
         # Download audio
         response = requests.get(audio_url, timeout=30)
         if response.status_code != 200:
             return jsonify({'error': 'Failed to download audio file'}), 400
-        
+
         # Save temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
             tmp_file.write(response.content)
             tmp_path = tmp_file.name
-        
+
         # Analyze
         result = analyze_audio_comprehensive(tmp_path)
-        os.unlink(tmp_path)
-        
+
         # Convert numpy types to JSON-serializable types
         result = convert_numpy_types(result)
         return jsonify(result)
-        
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    finally:
+        # Always cleanup temp file
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
 
 @app.route('/music-theory', methods=['POST'])
 def analyze_music_theory():
     """Dedicated endpoint for Basic Pitch music theory analysis"""
+    tmp_path = None  # Track file for cleanup
     try:
         # Check API key
         api_key = request.headers.get('X-API-Key')
         expected_key = os.environ.get('LIBROSA_API_KEY')
-        
+
         if not expected_key:
             return jsonify({'error': 'API key not configured on server'}), 500
-            
+
         if not api_key or api_key != expected_key:
             return jsonify({'error': 'Invalid or missing API key'}), 401
-        
+
         data = request.get_json()
         audio_url = data.get('audio_url')
-        
+
         if not audio_url:
             return jsonify({'error': 'No audio_url provided'}), 400
-        
+
         # Download audio
         response = requests.get(audio_url, timeout=30)
         if response.status_code != 200:
             return jsonify({'error': 'Failed to download audio file'}), 400
-        
+
         # Save temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
             tmp_file.write(response.content)
             tmp_path = tmp_file.name
-        
+
         # Analyze with Basic Pitch only
         result = analyze_basic_pitch(tmp_path)
-        os.unlink(tmp_path)
-        
+
         # Convert numpy types to JSON-serializable types
         result = convert_numpy_types(result)
         return jsonify(result)
-        
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    finally:
+        # Always cleanup temp file
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
 
 def analyze_audio_comprehensive(file_path):
     """Comprehensive musical analysis using librosa"""
@@ -1319,55 +1333,76 @@ def create_simple_single_track_midi(chord_progression, output_path, tempo, track
 @app.route('/extract-chords-midi', methods=['POST'])
 def extract_chords_midi():
     """Extract chord progression and return downloadable MIDI file"""
+    tmp_path = None  # Track file for cleanup
     try:
         # Check API key
         api_key = request.headers.get('X-API-Key')
         expected_key = os.environ.get('LIBROSA_API_KEY')
-        
+
         if not expected_key:
             return jsonify({'error': 'API key not configured on server'}), 500
-            
+
         if not api_key or api_key != expected_key:
             return jsonify({'error': 'Invalid or missing API key'}), 401
-        
+
         data = request.get_json()
         audio_url = data.get('audio_url')
         include_tracks = data.get('include_tracks', ['chords', 'bass', 'melody'])  # User can specify which tracks
-        
+
         # Custom naming options
         custom_names = data.get('custom_names', {})  # e.g., {"chords": "MyChords", "bass": "MyBass"}
         song_name = data.get('song_name', '')  # Optional song name for better file naming
         naming_style = data.get('naming_style', 'descriptive')  # 'descriptive', 'simple', 'timestamp'
-        
+
         if not audio_url:
             return jsonify({'error': 'No audio_url provided'}), 400
-        
+
         # Download audio
         response = requests.get(audio_url, timeout=30)
         if response.status_code != 200:
             return jsonify({'error': 'Failed to download audio file'}), 400
-        
+
         # Save temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
             tmp_file.write(response.content)
             tmp_path = tmp_file.name
-        
+
         # Extract chords and create MIDI with custom naming
         result = extract_chord_progression_midi(tmp_path, include_tracks, custom_names, song_name, naming_style)
-        os.unlink(tmp_path)
-        
+
         return jsonify(result)
-        
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    finally:
+        # Always cleanup temp audio file
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
 
 @app.route('/download-midi/<filename>', methods=['GET'])
 def download_midi(filename):
-    """Serve the generated MIDI file for download"""
+    """Serve the generated MIDI file for download and cleanup after"""
     try:
+        # Security: Only allow .mid files, no path traversal
+        if not filename.endswith('.mid') or '/' in filename or '\\' in filename:
+            return jsonify({'error': 'Invalid filename'}), 400
+
         file_path = f"/tmp/{filename}"
         if not os.path.exists(file_path):
             return jsonify({'error': 'MIDI file not found'}), 404
+
+        # Schedule cleanup after response is sent
+        @after_this_request
+        def cleanup(response):
+            try:
+                if os.path.exists(file_path):
+                    os.unlink(file_path)
+            except:
+                pass
+            return response
 
         return send_file(file_path,
                         as_attachment=True,
