@@ -1,22 +1,56 @@
-# TMA EngineOS KOE Librosa API
+# KOE Audio Analysis API
 
-A comprehensive Python backend API for TMA EngineOS KOE Engine, providing advanced audio analysis capabilities for music artists. This API combines Librosa's powerful audio analysis with Spotify's Basic Pitch for music theory insights.
+A comprehensive audio analysis API for music producers, providing professional mix/master evaluation with AI-powered genre-specific feedback.
 
 ## Features
 
-### Core Audio Analysis
-- **Tempo and Beat Detection**: Accurate BPM detection and beat timing analysis
-- **Key Estimation**: Major/minor key detection with confidence scoring
-- **Harmonic Analysis**: Separation of harmonic vs percussive content
-- **Spectral Analysis**: Brightness and frequency content analysis
-- **Dominant Notes**: Identification of the most prominent notes in the audio
+### Streaming Platform Support
+Analyze tracks directly from popular platforms:
+- SoundCloud
+- YouTube
+- Bandcamp
+- Audiomack
+- TikTok
+- Instagram
+- Twitter/X
 
-### Music Theory Analysis (NEW)
-- **Note Transcription**: Automatic conversion of audio to musical notes
-- **Pitch Range Analysis**: Detection of lowest/highest notes and vocal/instrumental range
-- **Melody Line Extraction**: Identification of the main melodic content
-- **Note Duration Statistics**: Analysis of rhythm patterns and note timing
-- **Chord Progression Insights**: Understanding of harmonic content over time
+### Professional Mix Analysis (via Tonn/RoEx)
+- **Loudness Metering**: Integrated LUFS, loudness range, true peak
+- **Stereo Analysis**: Width, mono compatibility, phase issues
+- **Dynamic Range**: Compression evaluation
+- **Technical Quality**: Sample rate, bit depth, clipping detection
+
+### Genre-Specific Production Targets
+Optimized mixing/mastering specs for 13 genres:
+
+| Genre | Target LUFS | Clipping Tolerance | Stereo Width |
+|-------|-------------|-------------------|--------------|
+| Drum & Bass | -8 to -7 | Low | 70-100% |
+| Dubstep | -6 to -4 | High | 70-100% |
+| Trap | -10 to -8 | High | 40-80% |
+| Techno | -8 to -6 | Moderate | 60-100% |
+| Baile Funk | -10 to -8 | Extreme | 50-80% |
+| UK Garage | -9 to -6 | Moderate | 50-85% |
+| Bass House | -10 to -8 | High | 60-100% |
+| Trance | -10 to -8 | Low | 80-100% |
+| Afrobeats | -10 to -8 | Moderate | 50-85% |
+| Hip-Hop | -12 to -9 | Moderate | 40-70% |
+| Pop | -10 to -8 | None | 50-80% |
+| R&B | -12 to -9 | None | 40-70% |
+
+### AI-Powered Feedback (Claude)
+Personalized production advice based on your genre:
+- Overall mix rating
+- Loudness evaluation against genre standards
+- Stereo field recommendations
+- Dynamics assessment
+- Actionable production tips
+
+### Music Theory Analysis (Basic Pitch)
+- Note transcription
+- Pitch range detection
+- Melody line extraction
+- Chord progression insights
 
 ## API Endpoints
 
@@ -24,211 +58,190 @@ A comprehensive Python backend API for TMA EngineOS KOE Engine, providing advanc
 ```
 GET /
 ```
-Returns API status and version information.
+Returns API status and supported platforms.
 
-### Comprehensive Audio Analysis
+### Full Analysis (Recommended)
 ```
-POST /analyze
+POST /analyze-full
 ```
-Performs complete audio analysis including both traditional Librosa features and music theory analysis.
+Complete analysis with streaming platform support, Tonn mix analysis, and AI feedback.
 
 **Headers:**
-- `X-API-Key`: Required API key for authentication
+```
+X-API-Key: your_api_key
+Content-Type: application/json
+```
 
-**Request Body:**
+**Request:**
 ```json
 {
-  "audio_url": "https://example.com/audio.wav"
+  "audio_url": "https://soundcloud.com/artist/track",
+  "genre": "drum-and-bass",
+  "is_master": true
 }
 ```
 
-**Response Example:**
+**Response:**
 ```json
 {
-  "duration": 120.5,
-  "tempo": 128.0,
-  "estimated_key": "C major",
-  "dominant_notes": ["C", "E", "G"],
-  "energy_balance": {
-    "harmonic": 0.65,
-    "percussive": 0.35,
-    "ratio": 0.65,
-    "dominant": "harmonic"
+  "source": {
+    "url": "https://soundcloud.com/artist/track",
+    "platform": "SoundCloud",
+    "genre": "drum-and-bass",
+    "is_master": true
   },
-  "brightness": {
-    "average": 2150.3
+  "librosa": {
+    "tempo": 174.2,
+    "estimated_key": "F minor",
+    "duration": 245.5,
+    "beat_count": 712,
+    "dominant_notes": ["F", "C", "G#"],
+    "energy_balance": {
+      "harmonic": 0.45,
+      "percussive": 0.55,
+      "dominant": "percussive"
+    },
+    "brightness": { "average": 2850.3 }
   },
-  "beat_count": 256,
-  "beat_times": [0.47, 0.94, 1.41, 1.88],
-  "music_theory": {
-    "method": "basic_pitch",
-    "total_notes": 342,
-    "pitch_range": {
-      "lowest": 60,
-      "highest": 84,
-      "lowest_note": "C4",
-      "highest_note": "C6",
-      "range_semitones": 24
+  "tonn": {
+    "loudness": {
+      "integrated_lufs": -7.5,
+      "loudness_range_lu": 6.2,
+      "true_peak_dbfs": -0.8
     },
-    "most_common_notes": [
-      ["C", 45],
-      ["E", 38],
-      ["G", 35]
-    ],
-    "note_durations": {
-      "average": 0.5,
-      "shortest": 0.1,
-      "longest": 2.3,
-      "std_dev": 0.4
+    "stereo": {
+      "width": 85,
+      "field": "WIDE",
+      "mono_compatible": true,
+      "phase_issues": false
     },
-    "melody_line": [
-      {"time": 0.0, "pitch": 72, "note_name": "C5"},
-      {"time": 0.5, "pitch": 76, "note_name": "E5"}
-    ]
+    "technical": {
+      "sample_rate": 44100,
+      "bit_depth": 16,
+      "clipping": "NONE"
+    }
+  },
+  "summary": {
+    "tempo": 174.2,
+    "key": "F minor",
+    "duration": 245.5,
+    "loudness_lufs": -7.5,
+    "stereo_width": 85,
+    "dynamic_range": 6.2
+  },
+  "genre_targets": {
+    "name": "Drum & Bass",
+    "lufs_target": [-8, -7],
+    "stereo_width_target": [70, 100],
+    "clipping_tolerance": "low",
+    "characteristics": "Sharp transients, mono sub below 120Hz..."
+  },
+  "ai_feedback": {
+    "overall_rating": "EXCELLENT",
+    "genre_match_score": 9,
+    "headline": "Club-ready D&B master with punchy transients and proper loudness.",
+    "loudness_feedback": {
+      "status": "PERFECT",
+      "message": "At -7.5 LUFS you're right in the D&B sweet spot..."
+    },
+    "stereo_feedback": {
+      "status": "PERFECT",
+      "message": "85% width is ideal for D&B atmospherics..."
+    },
+    "dynamics_feedback": {
+      "status": "ACCEPTABLE",
+      "message": "Good dynamic range preserved for transient punch..."
+    },
+    "technical_issues": [],
+    "strengths": ["Proper loudness for genre", "Wide stereo field", "No clipping"],
+    "suggestions": ["Consider a touch more sub-bass presence", "..."]
   }
 }
 ```
 
-### Dedicated Music Theory Analysis
+### Quick Analysis (Librosa Only)
+```
+POST /analyze
+```
+Fast analysis without Tonn or AI feedback.
+
+### Music Theory
 ```
 POST /music-theory
 ```
-Performs only music theory analysis using Basic Pitch (with Librosa fallback).
+Dedicated note transcription and pitch analysis.
 
-**Headers:**
-- `X-API-Key`: Required API key for authentication
+### Chord Extraction
+```
+POST /extract-chords-midi
+```
+Extract chords and generate MIDI file.
 
-**Request Body:**
-```json
-{
-  "audio_url": "https://example.com/audio.wav"
-}
+## Supported Genres
+
+```
+drum-and-bass, dubstep, trap, techno, baile-funk,
+uk-garage, bass-house, trance, afrobeats,
+hip-hop, pop, r-and-b, other
 ```
 
-## Analysis Methods
+## Environment Variables
 
-### Basic Pitch Integration
-The API attempts to use Spotify's Basic Pitch for precise note transcription:
-- **Advantages**: Highly accurate note detection, precise timing, MIDI-quality output
-- **Use Cases**: Detailed music theory analysis, transcription, educational tools
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `PORT` | Server port (auto-set by Railway) | No |
+| `ROEX_API_KEY` | RoEx Tonn API key for mix analysis | Yes |
+| `ANTHROPIC_API_KEY` | Claude API key for AI feedback | Yes |
 
-### Librosa Fallback
-When Basic Pitch is unavailable, the API uses enhanced Librosa analysis:
-- **Advantages**: Reliable, fast, works in all environments
-- **Features**: Chroma analysis, onset detection, pitch tracking
-- **Use Cases**: General music analysis, key detection, rhythm analysis
+## Deployment
 
-## Environment Setup
+### Docker (Recommended)
+```bash
+docker build -t koe-api .
+docker run -p 5000:5000 \
+  -e ROEX_API_KEY=your_key \
+  -e ANTHROPIC_API_KEY=your_key \
+  koe-api
+```
 
-### Dependencies
+### Railway
+1. Connect GitHub repo
+2. Set environment variables
+3. Deploy (Dockerfile auto-detected)
+
+### Local Development
 ```bash
 pip install -r requirements.txt
-```
-
-### Environment Variables
-- `LIBROSA_API_KEY`: Required API key for authentication
-- `PORT`: Server port (default: 5000)
-
-### Railway Deployment
-The API is configured for Railway deployment with:
-- `Procfile`: Specifies the web process
-- Automatic dependency installation
-- Environment variable configuration
-
-## Development
-
-### Local Testing
-```bash
-# Set API key
-export LIBROSA_API_KEY=your_test_key
-
-# Run the server
+export ROEX_API_KEY=your_key
+export ANTHROPIC_API_KEY=your_key
 python app.py
-
-# Test the API
-curl -X GET http://localhost:5000/
 ```
 
-### Testing Music Theory Analysis
-```bash
-# Run the test script
-python test_basic_pitch.py
-```
+## Tech Stack
 
-## Integration with TMA EngineOS
+- **Framework**: Flask + Gunicorn
+- **Audio Analysis**: Librosa, Basic Pitch
+- **Mix Analysis**: RoEx Tonn API
+- **AI Feedback**: Anthropic Claude
+- **Audio Extraction**: yt-dlp
+- **ML Runtime**: TensorFlow CPU
 
-### Frontend Integration
-- Base44 frontend calls this API via serverless functions
-- Audio files are hosted externally (e.g., Tonn.roexaudio.com)
-- JSON-based communication for easy integration
+## Error Handling
 
-### Authentication
-- API key-based security via `X-API-Key` header
-- Environment variable configuration for secure key storage
-
-### Error Handling
-- Comprehensive error responses with appropriate HTTP status codes
-- Graceful fallback from Basic Pitch to Librosa when needed
-- Detailed error messages for debugging
-
-## Performance Considerations
-
-### Audio Processing
-- Optimized sample rates for balance between quality and speed
-- Temporary file management with automatic cleanup
-- Timeout handling for large audio files
-
-### Railway Limitations
-- Web request timeout limits
-- CPU-intensive analysis considerations
-- Memory usage optimization for large files
-
-## Future Enhancements
-
-### Basic Pitch Optimization
-- TensorFlow version compatibility improvements
-- CoreML support for faster inference
-- ONNX runtime integration for cross-platform deployment
-
-### Additional Features
-- Chord progression analysis
-- Scale detection and mode analysis
-- Advanced rhythm pattern recognition
-- Multi-instrument separation and analysis
-
-## API Response Formats
-
-### Success Response
 ```json
 {
-  "duration": 120.5,
-  "tempo": 128.0,
-  // ... analysis results
-}
-```
-
-### Error Response
-```json
-{
-  "error": "Description of the error"
+  "error": "Failed to extract audio from SoundCloud",
+  "details": "Track may be private or removed",
+  "tip": "Make sure the track is public and the URL is correct"
 }
 ```
 
 ### HTTP Status Codes
 - `200`: Success
-- `400`: Bad request (missing audio_url, download failed)
-- `401`: Unauthorized (invalid/missing API key)
-- `500`: Server error (configuration issues, analysis failures)
-
-## Contributing
-
-When extending the API:
-1. Maintain consistent JSON response formats
-2. Include comprehensive error handling
-3. Follow existing authentication patterns
-4. Test with various audio formats and durations
-5. Update documentation for new features
+- `400`: Bad request (invalid URL, unsupported platform)
+- `401`: Unauthorized (invalid API key)
+- `500`: Server error
 
 ## License
 
-This project is part of the TMA EngineOS ecosystem for AI-powered music analysis.# Deploy trigger Thu 25 Dec 2025 12:48:18 AWST
+Part of the TMA EngineOS ecosystem for AI-powered music production tools.
