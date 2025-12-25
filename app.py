@@ -155,7 +155,10 @@ GENRE_TARGETS = {
 
 def generate_ai_feedback(analysis_result, genre):
     """Generate AI-powered production feedback based on genre expectations"""
-    import anthropic  # Lazy import to avoid build issues
+    try:
+        import anthropic  # Lazy import
+    except ImportError:
+        return {'skipped': 'anthropic package not installed'}
 
     anthropic_key = os.environ.get('ANTHROPIC_API_KEY')
     if not anthropic_key:
