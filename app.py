@@ -7,13 +7,248 @@ import requests
 import time
 import subprocess
 import shutil
+import re
 from basic_pitch.inference import predict
 from basic_pitch import ICASSP_2022_MODEL_PATH
 import pretty_midi
 from collections import defaultdict
 import json
+import anthropic
 
 app = Flask(__name__)
+
+# =============================================================================
+# GENRE-SPECIFIC PRODUCTION TARGETS
+# =============================================================================
+
+GENRE_TARGETS = {
+    'electronic': {
+        'name': 'Electronic/EDM',
+        'lufs_target': (-8, -6),
+        'lufs_description': 'Loud masters are standard for club play',
+        'clipping_tolerance': 'moderate',
+        'stereo_width_target': (60, 100),
+        'dynamic_range_target': (4, 8),
+        'bass_emphasis': 'high',
+        'characteristics': 'Heavy compression, loud masters, wide stereo, punchy kicks, sustained bass'
+    },
+    'dubstep': {
+        'name': 'Dubstep/Bass Music',
+        'lufs_target': (-6, -4),
+        'lufs_description': 'Very loud masters are expected - louder is often better',
+        'clipping_tolerance': 'high',
+        'stereo_width_target': (70, 100),
+        'dynamic_range_target': (3, 6),
+        'bass_emphasis': 'extreme',
+        'characteristics': 'Aggressive limiting, heavy sub-bass, clipping can be intentional for grit, extreme loudness'
+    },
+    'hip-hop': {
+        'name': 'Hip-Hop/Trap',
+        'lufs_target': (-10, -7),
+        'lufs_description': 'Punchy but not overly crushed to preserve vocal clarity',
+        'clipping_tolerance': 'low',
+        'stereo_width_target': (40, 70),
+        'dynamic_range_target': (5, 9),
+        'bass_emphasis': 'high',
+        'characteristics': '808 sub-bass clarity, punchy drums, clear vocals, moderate loudness'
+    },
+    'pop': {
+        'name': 'Pop',
+        'lufs_target': (-10, -8),
+        'lufs_description': 'Radio-ready loudness while preserving dynamics for streaming',
+        'clipping_tolerance': 'none',
+        'stereo_width_target': (50, 80),
+        'dynamic_range_target': (6, 10),
+        'bass_emphasis': 'moderate',
+        'characteristics': 'Clean masters, no clipping, balanced frequency response, streaming-optimized'
+    },
+    'rock': {
+        'name': 'Rock',
+        'lufs_target': (-11, -8),
+        'lufs_description': 'Dynamic range preserved for energy, moderate loudness',
+        'clipping_tolerance': 'low',
+        'stereo_width_target': (60, 90),
+        'dynamic_range_target': (7, 12),
+        'bass_emphasis': 'moderate',
+        'characteristics': 'Natural dynamics, guitar clarity, punchy drums, analog warmth'
+    },
+    'r-and-b': {
+        'name': 'R&B/Soul',
+        'lufs_target': (-12, -9),
+        'lufs_description': 'Warmth and dynamics prioritized over loudness',
+        'clipping_tolerance': 'none',
+        'stereo_width_target': (40, 70),
+        'dynamic_range_target': (8, 14),
+        'bass_emphasis': 'moderate',
+        'characteristics': 'Warm low-end, smooth vocals, natural dynamics, minimal compression'
+    },
+    'classical': {
+        'name': 'Classical/Orchestral',
+        'lufs_target': (-18, -14),
+        'lufs_description': 'Maximum dynamic range is essential',
+        'clipping_tolerance': 'none',
+        'stereo_width_target': (80, 100),
+        'dynamic_range_target': (14, 20),
+        'bass_emphasis': 'natural',
+        'characteristics': 'Full dynamic range, natural stereo imaging, no limiting, pristine clarity'
+    },
+    'jazz': {
+        'name': 'Jazz',
+        'lufs_target': (-16, -12),
+        'lufs_description': 'Natural dynamics and room ambience preserved',
+        'clipping_tolerance': 'none',
+        'stereo_width_target': (60, 90),
+        'dynamic_range_target': (10, 16),
+        'bass_emphasis': 'natural',
+        'characteristics': 'Natural dynamics, acoustic clarity, minimal processing, warm tone'
+    },
+    'country': {
+        'name': 'Country',
+        'lufs_target': (-12, -9),
+        'lufs_description': 'Radio-friendly but natural sounding',
+        'clipping_tolerance': 'none',
+        'stereo_width_target': (50, 80),
+        'dynamic_range_target': (7, 12),
+        'bass_emphasis': 'moderate',
+        'characteristics': 'Natural acoustic instruments, clear vocals, moderate loudness'
+    },
+    'metal': {
+        'name': 'Metal',
+        'lufs_target': (-8, -5),
+        'lufs_description': 'Loud and aggressive is expected',
+        'clipping_tolerance': 'moderate',
+        'stereo_width_target': (70, 100),
+        'dynamic_range_target': (4, 8),
+        'bass_emphasis': 'high',
+        'characteristics': 'Heavy compression, loud masters, tight low-end, aggressive limiting'
+    },
+    'ambient': {
+        'name': 'Ambient/Experimental',
+        'lufs_target': (-18, -12),
+        'lufs_description': 'Dynamics and space are essential',
+        'clipping_tolerance': 'none',
+        'stereo_width_target': (80, 100),
+        'dynamic_range_target': (12, 20),
+        'bass_emphasis': 'variable',
+        'characteristics': 'Wide stereo field, full dynamics, atmospheric space, no aggressive limiting'
+    },
+    'other': {
+        'name': 'General/Mixed',
+        'lufs_target': (-14, -9),
+        'lufs_description': 'Balanced approach for streaming platforms',
+        'clipping_tolerance': 'low',
+        'stereo_width_target': (50, 80),
+        'dynamic_range_target': (6, 12),
+        'bass_emphasis': 'moderate',
+        'characteristics': 'Balanced frequency response, streaming-optimized loudness'
+    }
+}
+
+def generate_ai_feedback(analysis_result, genre):
+    """Generate AI-powered production feedback based on genre expectations"""
+
+    anthropic_key = os.environ.get('ANTHROPIC_API_KEY')
+    if not anthropic_key:
+        return {'skipped': 'ANTHROPIC_API_KEY not configured'}
+
+    try:
+        client = anthropic.Anthropic(api_key=anthropic_key)
+
+        # Get genre targets
+        targets = GENRE_TARGETS.get(genre, GENRE_TARGETS['other'])
+
+        # Extract key metrics from analysis
+        librosa_data = analysis_result.get('librosa', {})
+        tonn_data = analysis_result.get('tonn', {})
+
+        tempo = librosa_data.get('tempo', 'Unknown')
+        key = librosa_data.get('estimated_key', 'Unknown')
+        duration = librosa_data.get('duration', 0)
+        energy_balance = librosa_data.get('energy_balance', {})
+
+        loudness = tonn_data.get('loudness', {})
+        stereo = tonn_data.get('stereo', {})
+        technical = tonn_data.get('technical', {})
+        master_eval = tonn_data.get('master_eval', {})
+
+        lufs = loudness.get('integrated_lufs', 'N/A')
+        true_peak = loudness.get('true_peak_dbfs', 'N/A')
+        stereo_width = stereo.get('width', 'N/A')
+        clipping = technical.get('clipping', 'NONE')
+        drc_rating = master_eval.get('drc', 'N/A')
+
+        prompt = f"""You are KOE, an expert AI music production mentor. Analyze this track and provide personalized feedback.
+
+## Artist's Genre: {targets['name']}
+Genre characteristics: {targets['characteristics']}
+Target LUFS range: {targets['lufs_target'][0]} to {targets['lufs_target'][1]} LUFS ({targets['lufs_description']})
+Clipping tolerance for this genre: {targets['clipping_tolerance']}
+Expected stereo width: {targets['stereo_width_target'][0]}-{targets['stereo_width_target'][1]}%
+Expected dynamic range: {targets['dynamic_range_target'][0]}-{targets['dynamic_range_target'][1]} dB
+
+## Track Analysis Results:
+- Tempo: {tempo} BPM
+- Key: {key}
+- Duration: {duration}s
+- Energy: {energy_balance.get('ratio', 'N/A')} harmonic ratio ({energy_balance.get('dominant', 'N/A')} dominant)
+- Integrated Loudness: {lufs} LUFS
+- True Peak: {true_peak} dBFS
+- Stereo Width: {stereo_width}%
+- Clipping Detection: {clipping}
+- Dynamic Range Rating: {drc_rating}
+- Mono Compatible: {stereo.get('mono_compatible', 'N/A')}
+- Phase Issues: {stereo.get('phase_issues', 'N/A')}
+
+## Your Task:
+Provide feedback in this exact JSON format:
+{{
+    "overall_rating": "EXCELLENT/GOOD/NEEDS_WORK/CONCERNING",
+    "genre_match_score": 1-10,
+    "headline": "One punchy sentence summary",
+    "loudness_feedback": {{
+        "status": "PERFECT/TOO_LOUD/TOO_QUIET/ACCEPTABLE",
+        "message": "Specific feedback about loudness for this genre"
+    }},
+    "stereo_feedback": {{
+        "status": "PERFECT/TOO_WIDE/TOO_NARROW/ACCEPTABLE",
+        "message": "Feedback about stereo width and imaging"
+    }},
+    "dynamics_feedback": {{
+        "status": "PERFECT/OVER_COMPRESSED/TOO_DYNAMIC/ACCEPTABLE",
+        "message": "Feedback about dynamic range for this genre"
+    }},
+    "technical_issues": ["List any technical problems"],
+    "strengths": ["List what's working well"],
+    "suggestions": ["3-5 actionable production tips specific to their genre"]
+}}
+
+Be encouraging but honest. Frame everything through the lens of {targets['name']} production standards. If something would be a problem in pop but is fine for their genre, say so!"""
+
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1024,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        # Parse the response
+        response_text = message.content[0].text
+
+        # Try to extract JSON from the response
+        json_match = re.search(r'\{[\s\S]*\}', response_text)
+        if json_match:
+            feedback = json.loads(json_match.group())
+            return feedback
+        else:
+            return {'error': 'Failed to parse AI response', 'raw': response_text}
+
+    except anthropic.APIError as e:
+        return {'error': f'Anthropic API error: {str(e)}'}
+    except json.JSONDecodeError as e:
+        return {'error': f'JSON parse error: {str(e)}', 'raw': response_text}
+    except Exception as e:
+        return {'error': f'AI feedback error: {str(e)}'}
 
 # =============================================================================
 # STREAMING PLATFORM EXTRACTION (yt-dlp)
@@ -1557,6 +1792,10 @@ def analyze_full():
                     'key': librosa_result.get('estimated_key'),
                     'duration': librosa_result.get('duration')
                 }
+
+        # Step 4: Generate AI feedback based on genre expectations
+        result['genre_targets'] = GENRE_TARGETS.get(genre, GENRE_TARGETS['other'])
+        result['ai_feedback'] = generate_ai_feedback(result, genre)
 
         return jsonify(result)
 
