@@ -1,5 +1,4 @@
 # Build config for Railway
-# Uses RAILPACK_DEPLOY_APT_PACKAGES=ffmpeg env var for system packages
 
 [phases.setup]
-nixPkgs = ['...', 'ffmpeg']
+nixPkgs = ['ffmpeg']
